@@ -46,3 +46,5 @@ python benchmark.py          # real run, 30 to 60 minutes on CPU
 Python 3 and Ollama are the only requirements. Set `ANTHROPIC_API_KEY` to use Claude instead (`pip install anthropic`).
 
 Author: Santiago
+
+demo.html
