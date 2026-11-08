@@ -47,4 +47,3 @@ Python 3 and Ollama are the only requirements. Set `ANTHROPIC_API_KEY` to use Cl
 
 Author: Santiago
 
-demo.html
