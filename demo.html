@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LLM + verificador simbólico</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1c1c1a;--mut:#6b6b66;--card:#fff;--line:#dcdcd4;--ok:#1f8a4c;--bad:#c62828;--acc:#3a5bd9;--ba:#c4521a;--bb:#1f6fb8;--bc:#6d3fb5;--bt:#fff;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--fg:#ecece8;--mut:#a0a09a;--card:#20201e;--line:#3a3a36;--ok:#4cc27d;--bad:#ef6a6a;--acc:#7b94ff;--ba:#f39a6b;--bb:#6bb0f0;--bc:#b794ee;--bt:#111;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161615;--fg:#ecece8;--mut:#a0a09a;--card:#20201e;--line:#3a3a36;--ok:#4cc27d;--bad:#ef6a6a;--acc:#7b94ff;--ba:#f39a6b;--bb:#6bb0f0;--bc:#b794ee;--bt:#111;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:20px 16px 32px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1rem;margin:0 0 8px}h2 small{color:var(--mut);font-weight:400}
+.sub{color:var(--mut);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.bars div.r{display:grid;grid-template-columns:150px 1fr 44px;gap:8px;align-items:center;margin:6px 0;font-size:.9rem}
+.bar{height:14px;background:var(--line);border-radius:7px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.on,button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.goal{font-weight:600;margin:0 0 6px}
+.scene{display:flex;justify-content:center}.scene svg{width:100%;max-width:460px;height:auto}
+.box{margin-top:8px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);min-height:3em;font-size:.95rem}
+.box.bad{border-color:var(--bad);color:var(--bad)}.box.ok{border-color:var(--ok);color:var(--ok)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:620px){.cols{grid-template-columns:1fr}}
+ol{margin:0;padding-left:0;list-style:none;font-family:ui-monospace,Consolas,monospace;font-size:.95rem}
+li{padding:3px 8px;border-radius:6px;border:1px solid transparent;color:var(--mut)}
+li.cur{border-color:var(--acc);color:var(--fg)}li.ok{color:var(--ok)}li.ok::before{content:"✓ "}li.bad{color:var(--bad);border-color:var(--bad)}li.bad::before{content:"✗ "}
+.ctl{display:flex;gap:8px;margin:4px 0 14px}
+.note{color:var(--mut);font-size:.85rem}
+</style>
+</head>
+<body>
+<main>
+<h1>LLM + verificador simbólico</h1>
+<p class="sub">Un modelo local propone un plan para mover bloques; un verificador comprueba cada paso y, si falla, le explica por qué.</p>
+
+<section class="card bars">
+<h2>Tasa de éxito <small>(30 tareas, qwen2.5:7b en local)</small></h2>
+<div class="r"><span>1 intento</span><div class="bar"><i style="width:43%"></i></div><b>43%</b></div>
+<div class="r"><span>4 intentos, sin feedback</span><div class="bar"><i style="width:43%"></i></div><b>43%</b></div>
+<div class="r"><span>4 intentos, con feedback</span><div class="bar"><i style="width:57%"></i></div><b>57%</b></div>
+</section>
+
+<div class="tabs" id="tabs"></div>
+
+<section class="card">
+<p class="goal" id="goal"></p>
+<div class="scene"><svg id="svg" viewBox="0 0 420 240" role="img" aria-label="Escena de bloques"></svg></div>
+<div class="box" id="box"></div>
+</section>
+
+<div class="cols">
+<section class="card"><h2>Intento del modelo <small>(real)</small></h2><ol id="lm"></ol></section>
+<section class="card"><h2>Plan válido <small>(calculado)</small></h2><ol id="lv"></ol></section>
+</div>
+
+<div class="ctl"><button class="pri" id="play">▶ Reproducir demo</button><button id="rst">↺ Reiniciar</button></div>
+
+<p class="note">Una sola ejecución de 30 tareas: el efecto es modesto (4 tareas) y el control sin feedback usa temperatura baja, así que no es concluyente. Los intentos del modelo son fallos reales de esa ejecución; los planes válidos los calcula un buscador, no el modelo.</p>
+</main>
+
+<script>
+const SC=[
+{goal:"Consigue que el bloque c esté encima del bloque a.",stacks:[["a"],["c","b"]],on:[["c","a"]],
+ model:["pick(b)","stack(b,a)","stack(c,b)"],valid:["pick(b)","place(b)","pick(c)","stack(c,a)"]},
+{goal:"Consigue que el bloque c esté encima del bloque a.",stacks:[["b"],["c","a"]],on:[["c","a"]],
+ model:["pick(b)","stack(b,a)","pick(c)","stack(c,a)"],valid:["pick(a)","place(a)","pick(c)","stack(c,a)"]},
+{goal:"Consigue que el bloque a esté encima del bloque b.",stacks:[["b"],["c","a"]],on:[["a","b"]],
+ model:["pick(c)","stack(c,b)","pick(a)","stack(a,b)"],valid:["pick(a)","stack(a,b)"]}
+];
+const $=id=>document.getElementById(id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let cur=0,run=0;
+
+function init(sc){const s=sc.stacks.map(x=>x.slice());while(s.length<4)s.push([]);return{stacks:s,held:null};}
+function clone(s){return{stacks:s.stacks.map(x=>x.slice()),held:s.held};}
+function col(s,b){return s.stacks.findIndex(x=>x.includes(b));}
+function topOf(st){return st[st.length-1];}
+
+function apply(s,step){
+  const m=/^(\w+)\((\w+)(?:,(\w+))?\)$/.exec(step),act=m[1],x=m[2],y=m[3],n=clone(s);
+  if(act==="pick"){
+    const i=col(n,x);
+    if(n.held||i<0||topOf(n.stacks[i])!==x)return{err:step+": "+x+" tiene algo encima o ya está en la mano"};
+    n.stacks[i].pop();n.held=x;return{s:n};
+  }
+  if(n.held!==x)return{err:step+": no estás sosteniendo "+x};
+  if(act==="place"){n.stacks[n.stacks.findIndex(z=>!z.length)].push(x);n.held=null;return{s:n};}
+  const j=col(n,y);
+  if(j<0||topOf(n.stacks[j])!==y)return{err:step+": "+y+" no está libre"};
+  n.stacks[j].push(x);n.held=null;return{s:n};
+}
+function goalOk(s,sc){
+  return sc.on.every(([x,y])=>{const i=col(s,x);return i>=0&&s.stacks[i].indexOf(x)===s.stacks[i].indexOf(y)+1&&s.stacks[i].includes(y);});
+}
+
+function blk(b,x,y){
+  return '<rect x="'+x+'" y="'+y+'" width="64" height="40" rx="6" fill="var(--b'+b+')"/>'+
+         '<text x="'+(x+32)+'" y="'+(y+27)+'" text-anchor="middle" font-size="18" font-weight="700" fill="var(--bt)">'+b+'</text>';
+}
+function draw(s){
+  const B=222;
+  let h='<line x1="10" y1="'+B+'" x2="410" y2="'+B+'" stroke="var(--line)" stroke-width="3"/>';
+  s.stacks.forEach((st,i)=>st.forEach((b,j)=>{h+=blk(b,43+i*100,B-(j+1)*42);}));
+  h+='<rect x="150" y="4" width="120" height="16" rx="5" fill="var(--mut)"/>'+
+     '<text x="210" y="16" text-anchor="middle" font-size="11" fill="var(--bg)">mano</text>';
+  if(s.held)h+='<line x1="210" y1="20" x2="210" y2="30" stroke="var(--mut)" stroke-width="3"/>'+blk(s.held,178,30);
+  $("svg").innerHTML=h;
+}
+function setList(id,steps,st){
+  $(id).innerHTML=steps.map((t,i)=>'<li class="'+st[i]+'">'+t+'</li>').join("");
+}
+function box(cls,txt){const b=$("box");b.className="box "+cls;b.textContent=txt;}
+
+function reset(){
+  run++;const sc=SC[cur];
+  $("goal").textContent=sc.goal;draw(init(sc));
+  setList("lm",sc.model,sc.model.map(()=>"todo"));
+  setList("lv",sc.valid,sc.valid.map(()=>"todo"));
+  box("","Pulsa «Reproducir demo».");
+  document.querySelectorAll("#tabs button").forEach((b,i)=>b.classList.toggle("on",i===cur));
+}
+
+async function play(){
+  reset();const my=++run,sc=SC[cur];
+  let s=init(sc);
+  let st=sc.model.map(()=>"todo");
+  box("","El modelo propone un plan…");await sleep(900);if(my!==run)return;
+  for(let k=0;k<sc.model.length;k++){
+    st[k]="cur";setList("lm",sc.model,st);await sleep(900);if(my!==run)return;
+    const r=apply(s,sc.model[k]);
+    if(r.err){
+      st[k]="bad";setList("lm",sc.model,st);
+      box("bad","Verificador: "+r.err+". El plan se rechaza y este mensaje vuelve al modelo.");
+      await sleep(3200);if(my!==run)return;break;
+    }
+    s=r.s;st[k]="ok";draw(s);setList("lm",sc.model,st);
+  }
+  box("","Segundo intento: plan válido…");s=init(sc);draw(s);
+  let v=sc.valid.map(()=>"todo");
+  await sleep(1200);if(my!==run)return;
+  for(let k=0;k<sc.valid.length;k++){
+    v[k]="cur";setList("lv",sc.valid,v);await sleep(900);if(my!==run)return;
+    const r=apply(s,sc.valid[k]);s=r.s;v[k]="ok";draw(s);setList("lv",sc.valid,v);
+  }
+  box(goalOk(s,sc)?"ok":"bad",goalOk(s,sc)?"Objetivo cumplido ✓ El verificador acepta el plan.":"El plan no cumple el objetivo.");
+}
+
+$("tabs").innerHTML=SC.map((_,i)=>'<button data-i="'+i+'">Caso '+(i+1)+'</button>').join("");
+$("tabs").addEventListener("click",e=>{const i=e.target.dataset.i;if(i!==undefined){cur=+i;reset();}});
+$("play").onclick=play;$("rst").onclick=reset;
+reset();
+</script>
+</body>
+</html>
